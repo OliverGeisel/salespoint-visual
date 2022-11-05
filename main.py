@@ -48,8 +48,8 @@ def print_tree_clean(tree: dict, intent: int = 0):
     """
     intent_str = "\t" * intent
     element = tree["element"]
-    color_start, color_end = select_color(element)
-    print(f"{color_start}{intent_str}{element.getAttribute('name')} - {tree[0].attributes.items()}{color_end}")
+    color_start, color_end = select_color(tree)
+    print(f"{color_start}{intent_str}{element.getAttribute('name')} - {element.attributes.items()}{color_end}")
 
     if "children" in tree.keys():
         for child in tree["children"]:
@@ -111,14 +111,14 @@ def print_tree_show(tree, intent=0, chars=4):
 
 def print_tree_selected(tree: dict, intent=0):
     intent_str = "\t" * intent
-    element: minidom.Element = tree[0]
+    element: minidom.Element = tree["element"]
     color_start, color_end = select_color(tree)
-    if len(tree) > 2:
+    if "selected" in tree.keys():
         print(
-            f"{color_start}{intent_str}{element.getAttribute('name')} - {tree[0].attributes.items()}{color_end}")
-    if len(tree[1]) > 0:
-        for i in tree[1]:
-            print_tree_selected(i, intent + 1)
+            f"{color_start}{intent_str}{element.getAttribute('name')} - {element.attributes.items()}{color_end}")
+    if "children" in tree.keys():
+        for child in tree["children"]:
+            print_tree_selected(child, intent + 1)
 
 
 def get_tree(element: minidom.Element, parent=None) -> dict:
