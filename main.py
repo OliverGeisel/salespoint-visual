@@ -5,14 +5,15 @@ from xml.dom import minidom
 
 import svgwrite
 
+import extension.minimalModel
+
 
 def select_color(element: dict):
+    color_start = ""
     if "selected" in element.keys():
         color_start = "\x1B[32m"  # green
-    elif element["element"].getAttribute("mandatory") == "true":
+    if "mandatory" in element.keys():
         color_start = "\x1B[31m"  # red
-    else:
-        color_start = ""
     color_end = "\x1B[0m" if element["element"].getAttribute(
         "mandatory") == "true" or "selected" in element.keys() else ""
     return color_start, color_end
@@ -56,6 +57,38 @@ def print_tree_clean(tree: dict, intent: int = 0):
             print_tree_clean(child, intent + 1)
 
 
+def parse_prefix(name_complete: str):
+    elements = name_complete.split("_")
+    if re.fullmatch(r"[A-Z]", elements[0]):
+        elements.pop(0)
+    if re.match(r"\d+", elements[0]):
+        elements.pop(0)
+    return "_".join(elements)
+
+
+def get_show_strings_mapping(tree_element: dict, intent: int = 0, chars: int = 4, back_list=None, color: bool = True,
+                             space_char: str = " ", connect="-", prefix: bool = True) -> dict[str, list]:
+    back = dict() if back_list is None else back_list
+    senk = f'|{space_char * (chars - 1)}' * (intent - 1)
+    intent_str = "" if intent == 0 else senk + "|" + connect * (chars - 1)
+    # brach element
+    element: minidom.Element = tree_element["element"]
+    color_start, color_end = select_color(tree_element) if color else ("", "")
+
+    if "selected" in tree_element.keys():
+        name = element.getAttribute('name') if prefix else parse_prefix(element.getAttribute('name'))
+        attributes = ["selected"]
+        if "mandatory" in tree_element.keys():
+            attributes.append("mandatory")
+        if "minimal" in tree_element.keys():
+            attributes.append("minimal")
+        back[f"{color_start}{intent_str}{name}{color_end}"] = attributes
+    if "children" in tree_element.keys():
+        for child in tree_element["children"]:
+            get_show_strings_mapping(child, intent + 1, chars, back, color, space_char, connect, prefix)
+    return back
+
+
 def get_show_strings(tree_element: dict, intent: int = 0, chars: int = 4, back_list=None, color: bool = True,
                      space_char: str = " ", connect="-", prefix: bool = True) -> list[str]:
     """
@@ -85,14 +118,6 @@ def get_show_strings(tree_element: dict, intent: int = 0, chars: int = 4, back_l
     # brach element
     element: minidom.Element = tree_element["element"]
     color_start, color_end = select_color(tree_element) if color else ("", "")
-
-    def parse_prefix(name_complete: str):
-        elements = str(element.getAttribute('name')).split("_")
-        if re.fullmatch(r"[A-Z]", elements[0]):
-            elements.pop(0)
-        if re.match(r"\d+", elements[0]):
-            elements.pop(0)
-        return "_".join(elements)
 
     if "selected" in tree_element.keys():
         name = element.getAttribute('name') if prefix else parse_prefix(element.getAttribute('name'))
@@ -186,6 +211,7 @@ def in_tree_and_config(tree, elements: list):
     for tree_element in tree_as_list(tree):
         if tree_element["element"].getAttribute("name") in elements:
             tree_element["selected"] = True
+    _select_tree_transitive(tree)
 
 
 def _select_tree_transitive(tree) -> bool:
@@ -212,21 +238,63 @@ def _select_tree_transitive(tree) -> bool:
     return change
 
 
+def _select_tree_transitive_func(tree, attribute, yes, no=None):
+    # leaf or has attribute
+    if attribute in tree.keys() and "children" not in tree.keys():
+        return tree[attribute]
+    if "children" not in tree.keys():
+        return False
+    # branch
+    change = False
+    for child in tree["children"]:
+        if _select_tree_transitive_func(child, attribute, yes, no):
+            change = True
+    if change:
+        tree[attribute] = yes
+    else:
+        if no is not None:
+            tree[attribute] = no
+    return change
+
+
+def in_tree_and_config_func(tree, elements, func, attribute, yes, no=None, transitive=True):
+    for tree_element in tree_as_list(tree):
+        if func(tree_element, elements):
+            tree_element[attribute] = yes
+        else:
+            if no is not None:
+                tree_element[attribute] = no
+    if transitive:
+        _select_tree_transitive_func(tree, attribute, yes, no)
+
+
 def get_structure(model_file: pathlib.Path):
+    # prepare
     if not model_file.is_file():
         raise Exception("Datei ist nicht existent!")
-    content: minidom.Document = minidom.parse(model_file.open("r"))
-    structure: minidom.Element = content.getElementsByTagName("struct")[0]
-    tree_structure = get_tree(structure)
     file_name = sys.argv[1]
     config_file = pathlib.Path(file_name)
     if not config_file.exists():
         raise Exception("Datei existiert nicht")
     elements = [x.strip() for x in config_file.open().readlines()]
-    in_tree_and_config(tree_structure, elements)
-    _select_tree_transitive(tree_structure)
+    content: minidom.Document = minidom.parse(model_file.open("r"))
+    structure: minidom.Element = content.getElementsByTagName("struct")[0]
+    del content, file_name, config_file
+    # edit and compare
+    tree_structure = get_tree(structure)
+    func = lambda x, y: x["element"].getAttribute("name") in y
+    yes = True
+    no = None
+    in_tree_and_config_func(tree_structure, elements, func, "selected", yes, no)
+    func = lambda x, y: x["element"].getAttribute("mandatory") == "true"
+    in_tree_and_config_func(tree_structure, elements, func, "mandatory", yes, no)
+    configs = extension.minimalModel.get_configs(pathlib.Path(""))
+    minimal_model = extension.minimalModel.get_minimal_model(configs)
+    func = lambda x, y: x["element"].getAttribute("name") in y
+    in_tree_and_config_func(tree_structure, minimal_model, func, "minimal", yes, no)
+    # print
     print_tree_show(tree_structure)
-    draw_svg(tree_structure["children"][0], len(elements),15)
+    draw_svg(tree_structure["children"][0], len(elements), 15)
 
 
 def draw_svg(tree, num_lines: int, fontsize: int = 12):
@@ -241,13 +309,17 @@ def draw_svg(tree, num_lines: int, fontsize: int = 12):
     @return:
     @rtype:
     """
-    height = int((fontsize + 1) * num_lines*1.3)
+    height = int((fontsize + 1) * num_lines * 1.3)
     picture = svgwrite.Drawing(f"{sys.argv[1].split('.')[0] if len(sys.argv) < 3 else sys.argv[2].split('.')[0]}.svg",
                                ("350", str(height)))
     # picture.append(drawSvg.Rectangle(0, 0, 400, 2400, ))
-    for num, line in enumerate(get_show_strings(tree, color=False, prefix=False), 1):
-        fill = "green" if False else "black"
-        picture.add(picture.text(line, insert=(5, num * (fontsize+1)), style=f"font-size: {fontsize}px;"))
+    for num, line in enumerate(
+            get_show_strings_mapping(tree, color=False, prefix=False, intent=1, space_char="\xa0", connect="-").items(),
+            1):
+        fill = "#00e600" if "minimal" in line[1] else "black" if "mandatory" in line[1] else "#1aa3ff"
+        style = f"font-size: {fontsize}px;"
+        picture.add(
+            picture.text(line[0], insert=(5, num * (fontsize + 1)), style=style, fill=fill))
     picture.save()
 
 
